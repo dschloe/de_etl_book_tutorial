@@ -1,7 +1,6 @@
 numpy
 pandas
 jupyterlab
-streamlit
 matplotlib
 polars
 openpyxl

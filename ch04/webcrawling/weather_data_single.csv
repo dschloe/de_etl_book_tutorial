@@ -1,0 +1,11 @@
+city,main_weather,description,temperature,feels_like,humidity,wind_speed
+Tokyo,Clouds,broken clouds,29.86,33.8,66,8.23
+Delhi,Mist,mist,27.05,30.77,89,2.06
+Shanghai,Clouds,broken clouds,31.92,38.92,74,5.0
+Dhaka,Haze,haze,28.99,35.99,89,3.09
+Cairo,Clouds,scattered clouds,26.42,26.42,73,3.09
+Sao Paulo,Clouds,broken clouds,12.52,12.18,90,3.13
+Mexico City,Thunderstorm,thunderstorm with heavy rain,13.86,13.73,93,4.12
+Beijing,Clear,clear sky,29.94,32.52,59,0.55
+Mumbai,Mist,mist,27.99,32.54,83,6.17
+New York,Rain,heavy intensity rain,19.67,20.02,89,8.49
