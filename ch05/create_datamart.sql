@@ -63,6 +63,6 @@ SELECT
 FROM
     dm_sale_summary
 WHERE
-    cgg_name = '강남구' AND sale_year = 2024
+    cgg_name = '관악구' AND sale_year = 2025
 ORDER BY
     sale_month;
