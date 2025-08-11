@@ -7,3 +7,5 @@ openpyxl
 xlrd
 sqlalchemy
 mysql-connector-python
+missingno
+scikit-learn
