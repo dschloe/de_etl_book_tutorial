@@ -1,0 +1,14 @@
+10.0.0.5 - - [12/Aug/2025:17:56:24 +0000] "GET /incomplete HTTP/1.1" - - "-" "-"
+172.16.1.23 - - [12/Aug/2025:18:15:21 +0000] "GET /incomplete HTTP/1.1" - - "-" "-"
+192.168.0.10 - - [12/Aug/2025:20:34:23 +0000] "GET /incomplete HTTP/1.1" - - "-" "-"
+BROKEN LINE WITHOUT FIELDS
+"curl/8.6.0" 301
+192.168.0.10 - - [14/Aug/2025:08:42:52 +0000] "GET /incomplete HTTP/1.1" - - "-" "-"
+BROKEN LINE WITHOUT FIELDS
+10.0.0.5 - - [13/Aug/2025:11:12:59 +0000] "GET /incomplete HTTP/1.1" - - "-" "-"
+203.0.113.45 - - [12/Aug/2025:23:17:06 +0000] "GET /incomplete HTTP/1.1" - - "-" "-"
+BROKEN LINE WITHOUT FIELDS
+172.16.1.23 - - [13/Aug/2025:10:10:03 +0000] "GET /incomplete HTTP/1.1" - - "-" "-"
+BROKEN LINE WITHOUT FIELDS
+10.0.0.5 - - [13/Aug/2025:20:33:31 +0000] "GET /incomplete HTTP/1.1" - - "-" "-"
+192.168.0.10 - - [13/Aug/2025:16:53:02 +0000] "GET /incomplete HTTP/1.1" - - "-" "-"
