@@ -11,3 +11,4 @@ missingno
 scikit-learn
 advertools
 pymongo
+duckdb
