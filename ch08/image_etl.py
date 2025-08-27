@@ -1,130 +1,322 @@
+# -*- coding: utf-8 -*-
+"""
+Books to Scrape 크롤러 (멀티스레딩 / 5페이지 / 진행상황+ETA / 이미지 다운로드)
+- 상세 파싱과 동시에 표지 이미지를 data/images/ 에 저장
+- 다운로드된 이미지의 임베딩을 생성하여 Milvus에 저장
+"""
+
 import os
+import re
+import json
+import time
+import threading
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urljoin, urlparse
+
 import requests
-import numpy as np
-import matplotlib.pyplot as plt
-from PIL import Image
-from pymilvus import connections, FieldSchema, CollectionSchema, Collection, DataType, utility
+from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+from pymilvus import MilvusClient, DataType
 from sentence_transformers import SentenceTransformer
+from PIL import Image
 
-def process_image_with_milvus():
-    """
-    이미지를 다운로드하고 벡터화하여 Milvus에 저장한 후, 다시 불러와서 시각화하는 함수
-    """
-    
-    # 1. 이미지 다운로드 및 로컬에 저장
-    image_url = 'http://books.toscrape.com/media/cache/fe/72/fe72f0532301ec28892ae79a629a293c.jpg'
-    local_image_path = 'downloaded_image.jpg'
-    
-    print("이미지를 다운로드 중입니다...")
+START_URL = "http://books.toscrape.com/catalogue/page-1.html"
+HEADERS = {"User-Agent": "Mozilla/5.0"}
+MAX_WORKERS = 16
+PER_REQUEST_PAUSE = 0.03
+
+DATA_DIR = Path("data")
+IMAGES_DIR = DATA_DIR / "images"
+
+print_lock = threading.Lock()
+
+# --- Milvus 및 모델 설정 ---
+MILVUS_HOST = os.environ.get("MILVUS_HOST", "localhost")
+MILVUS_PORT = os.environ.get("MILVUS_PORT", "19530")
+MILVUS_COLLECTION_NAME = "book_images_collection"
+
+# 이미지 임베딩 모델 로드
+try:
+    # Milvus 문서에서 권장하는 모델 중 하나인 'clip-ViT-B-32'를 사용합니다.
+    # 이 모델은 이미지와 텍스트를 같은 벡터 공간에 임베딩할 수 있습니다.
+    # 한글 처리를 위해 'multilingual-v1' 버전으로 변경합니다.
+    image_model = SentenceTransformer("clip-ViT-B-32-multilingual-v1")
+    print("✅ 이미지 임베딩 모델 로드 완료.")
+except Exception as e:
+    print(f"❌ 이미지 임베딩 모델 로드 실패: {e}")
+    image_model = None
+
+def make_session():
+    """요청 세션을 생성하고 재시도 정책을 설정합니다."""
+    s = requests.Session()
+    retries = Retry(
+        total=3, connect=3, read=3, backoff_factor=0.5,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET"])
+    )
+    adapter = HTTPAdapter(max_retries=retries, pool_connections=100, pool_maxsize=100)
+    s.mount("http://", adapter)
+    s.mount("https://", adapter)
+    s.headers.update(HEADERS)
+    return s
+
+def clean_money(s):
+    """통화 기호와 불필요한 문자를 제거합니다."""
+    return (s or "").replace("Â", "").strip()
+
+def slugify(text, maxlen=80):
+    """파일 이름으로 사용할 수 있도록 텍스트를 정리합니다."""
+    text = re.sub(r"[^\w\s-]", "", text, flags=re.UNICODE)
+    text = re.sub(r"[\s_-]+", "-", text).strip("-")
+    return text[:maxlen] if text else "untitled"
+
+def guess_ext_from_url(url, default="jpg"):
+    """URL에서 이미지 확장자를 추측합니다."""
+    path = urlparse(url).path
+    if "." in path:
+        ext = path.rsplit(".", 1)[-1].lower()
+        if ext in {"jpg", "jpeg", "png", "webp"}:
+            return "jpg" if ext == "jpeg" else ext
+    return default
+
+def download_image(sess, img_url, title, upc):
+    """책 이미지를 다운로드하고 로컬 경로를 반환합니다."""
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    ext = guess_ext_from_url(img_url, default="jpg")
+    name_part = (upc or slugify(title))
+    filename = f"{name_part}.{ext}"
+    dest = IMAGES_DIR / filename
+
+    # 파일명 중복 방지
+    if dest.exists():
+        i = 2
+        while True:
+            cand = IMAGES_DIR / f"{name_part}-{i}.{ext}"
+            if not cand.exists():
+                dest = cand
+                break
+            i += 1
+
     try:
-        response = requests.get(image_url, stream=True)
-        response.raise_for_status()
-        with open(local_image_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        print(f"이미지가 성공적으로 다운로드되어 '{local_image_path}'에 저장되었습니다.")
-    except requests.exceptions.RequestException as e:
-        print(f"이미지 다운로드 중 오류가 발생했습니다: {e}")
-        return
-
-    # 2. 이미지 벡터화 (Sentence-Transformers 사용)
-    print("이미지를 벡터화하는 중입니다...")
-    try:
-        model = SentenceTransformer('clip-ViT-B-32')
-
-        image = Image.open(local_image_path).convert("RGB")
-        vector = model.encode(image)
-        
-        print(f"이미지 벡터화가 완료되었습니다. 벡터 크기: {len(vector)}")
-
+        with sess.get(img_url, timeout=20, stream=True) as r:
+            r.raise_for_status()
+            with open(dest, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+        return str(dest)
     except Exception as e:
-        print(f"이미지 벡터화 중 오류가 발생했습니다: {e}")
-        return
+        with print_lock:
+            print(f"(이미지 실패) {img_url} -> {e}")
+        return None
 
-    # 3. Milvus에 벡터 저장 및 인덱스 생성
-    print("Milvus에 연결하고 벡터를 저장하는 중입니다...")
-    collection_name = 'image_vectors_easier'
-    vector_dim = len(vector)
-    
+def parse_book_detail(html, base_url):
+    """책 상세 페이지 HTML을 파싱하여 정보를 추출합니다."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    details = {}
+    table = soup.find("table", class_="table table-striped")
+    if table:
+        for row in table.find_all("tr"):
+            th = row.find("th").get_text(strip=True)
+            td = row.find("td").get_text(strip=True)
+            details[th] = td
+
+    title = soup.find("div", class_="product_main").find("h1").get_text(strip=True)
+    desc_anchor = soup.find("div", id="product_description")
+    description = desc_anchor.find_next_sibling("p").get_text(strip=True) if desc_anchor else ""
+
+    img_tag = soup.select_one(".item.active img") or soup.find("img")
+    img_rel = img_tag["src"] if img_tag else ""
+    image_url = urljoin(base_url, img_rel)
+
+    return {
+        "title": title,
+        "upc": details.get("UPC"),
+        "product_type": details.get("Product Type", ""),
+        "price_excl_tax": clean_money(details.get("Price (excl. tax)")),
+        "price_incl_tax": clean_money(details.get("Price (incl. tax)")),
+        "tax": clean_money(details.get("Tax")),
+        "availability": details.get("Availability", ""),
+        "num_reviews": details.get("Number of reviews"),
+        "description": description,
+        "image_url": image_url,
+        "url": base_url,
+    }
+
+def get_book_details(url):
+    """책 상세 정보와 이미지를 다운로드합니다."""
+    sess = make_session()
     try:
-        connections.connect("default", host="localhost", port="19530")
+        resp = sess.get(url, timeout=15)
+        resp.raise_for_status()
+        data = parse_book_detail(resp.text, url)
 
-        fields = [
-            FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
-            FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=vector_dim),
-            FieldSchema(name="image_path", dtype=DataType.VARCHAR, max_length=256)
-        ]
-        schema = CollectionSchema(fields, "이미지 벡터를 저장하는 컬렉션")
-        
-        if utility.has_collection(collection_name):
-            # 수정된 부분: connections.get_collection() -> Collection(name)
-            Collection(collection_name).drop()
-        collection = Collection(collection_name, schema)
+        img_saved_path = None
+        if data.get("image_url"):
+            img_saved_path = download_image(
+                sess, data["image_url"], data.get("title", ""), data.get("upc")
+            )
+        data["image_path"] = img_saved_path
 
-        data = [[vector], [local_image_path]]
-        collection.insert(data)
-        collection.flush()
-        print(f"벡터와 이미지 경로가 Milvus 컬렉션 '{collection_name}'에 성공적으로 저장되었습니다.")
+        time.sleep(PER_REQUEST_PAUSE)
+        return data
+    except Exception as e:
+        with print_lock:
+            print(f"(건너뜀) {url} -> {e}")
+        return None
+    finally:
+        sess.close()
 
-        index_params = {
-            "metric_type": "IP", 
+def collect_book_urls(start_url, max_pages=5):
+    """책 목록 페이지를 순회하며 상세 페이지 URL을 수집합니다."""
+    urls = []
+    page_url = start_url
+    page_count = 0
+    sess = make_session()
+
+    while page_url and page_count < max_pages:
+        with print_lock:
+            print(f"[PAGE] {page_url}")
+        try:
+            resp = sess.get(page_url, timeout=15)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            for art in soup.find_all("article", class_="product_pod"):
+                a = art.find("h3").find("a")
+                book_rel = a["href"]
+                book_url = urljoin(page_url, book_rel)
+                urls.append(book_url)
+
+            page_count += 1
+            next_li = soup.find("li", class_="next")
+            page_url = urljoin(page_url, next_li.find("a")["href"]) if (next_li and page_count < max_pages) else None
+            time.sleep(PER_REQUEST_PAUSE)
+        except Exception as e:
+            with print_lock:
+                print(f"(페이지 건너뜀) {page_url} -> {e}")
+            break
+
+    sess.close()
+    return urls
+
+def parse_details_multithread(book_urls, milvus_client, max_workers=MAX_WORKERS):
+    """멀티스레드를 사용하여 책 상세 페이지를 파싱하고 Milvus에 데이터를 추가합니다."""
+    results = []
+    total = len(book_urls)
+    done_cnt = 0
+    start_time = time.perf_counter()
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        fut_map = {ex.submit(get_book_details, u): u for u in book_urls}
+        for fut in as_completed(fut_map):
+            data = fut.result()
+            if data:
+                if data.get("image_path") and image_model:
+                    try:
+                        # 이미지 파일 열기
+                        image = Image.open(data["image_path"])
+                        # 이미지 임베딩 생성 (벡터화)
+                        image_embedding = image_model.encode(image)
+                        
+                        # Milvus에 데이터 삽입
+                        milvus_client.insert(
+                            collection_name=MILVUS_COLLECTION_NAME,
+                            data=[{
+                                "vector": image_embedding.tolist(),
+                                "title": data.get("title", "N/A"),
+                                "url": data.get("url", "N/A"),
+                                "image_url": data.get("image_url", "N/A"),
+                                "upc": data.get("upc", "N/A"),
+                            }]
+                        )
+                        
+                        with print_lock:
+                            print(f"✅ Milvus에 '{data['title']}' 이미지 벡터 추가 완료.")
+
+                    except Exception as e:
+                        with print_lock:
+                            print(f"❌ '{data.get('title', 'N/A')}' 이미지 처리 또는 Milvus 삽입 실패: {e}")
+
+                results.append(data)
+
+            done_cnt += 1
+            elapsed = time.perf_counter() - start_time
+            avg_time = elapsed / max(1, done_cnt)
+            eta = avg_time * (total - done_cnt)
+
+            with print_lock:
+                print(f"[PROGRESS] {done_cnt}/{total} 완료 "
+                      f"({elapsed:.1f}s 경과, ETA {eta:.1f}s)")
+
+    return results
+
+def create_milvus_collection(milvus_client):
+    """Milvus 컬렉션을 생성하거나 재생성합니다."""
+    if milvus_client.has_collection(collection_name=MILVUS_COLLECTION_NAME):
+        milvus_client.drop_collection(collection_name=MILVUS_COLLECTION_NAME)
+        print(f"🗑️ 기존 '{MILVUS_COLLECTION_NAME}' 컬렉션 삭제 완료.")
+
+    # `clip-ViT-B-32-multilingual-v1` 모델의 임베딩 차원은 512입니다.
+    milvus_client.create_collection(
+        collection_name=MILVUS_COLLECTION_NAME,
+        dimension=512,
+        primary_field_name="pk",
+        vector_field_name="vector",
+        auto_id=True,
+        schema=[
+            {"name": "pk", "type": DataType.INT64, "is_primary": True, "auto_id": True},
+            {"name": "vector", "type": DataType.FLOAT_VECTOR, "dim": 512},
+            {"name": "title", "type": DataType.VARCHAR, "max_length": 256},
+            {"name": "url", "type": DataType.VARCHAR, "max_length": 512},
+            {"name": "image_url", "type": DataType.VARCHAR, "max_length": 512},
+            {"name": "upc", "type": DataType.VARCHAR, "max_length": 64},
+        ],
+        index_params={
+            "field_name": "vector",
+            "metric_type": "COSINE", # 이미지 유사도 검색에 적합한 '코사인' 유사도 사용
             "index_type": "IVF_FLAT",
             "params": {"nlist": 128}
         }
-        collection.create_index(field_name="vector", index_params=index_params)
-        print("인덱스 생성이 완료되었습니다.")
-    
-    except Exception as e:
-        print(f"Milvus 작업 중 오류가 발생했습니다. Milvus 서버가 실행 중인지 확인하세요: {e}")
-        return
-        
-    # 4. Milvus에서 벡터 및 관련 메타데이터 불러오기
-    print("Milvus에서 저장된 벡터를 다시 불러오는 중입니다...")
-    try:
-        # 수정된 부분: Collection(name)
-        collection = Collection(collection_name)
-        collection.load()
+    )
+    print(f"✨ '{MILVUS_COLLECTION_NAME}' 컬렉션 생성 완료.")
 
-        results = collection.query(
-            expr="id >= 0",
-            output_fields=["image_path"],
-            consistency_level="Strong"
-        )
-        
-        retrieved_path = results[0]["image_path"]
-        print(f"Milvus에서 불러온 이미지 경로: {retrieved_path}")
-
-        retrieved_image = Image.open(retrieved_path)
-        print("Milvus를 통해 가져온 경로의 이미지를 성공적으로 로드했습니다.")
-        
-    except Exception as e:
-        print(f"Milvus에서 데이터를 불러오는 중 오류가 발생했습니다: {e}")
-        return
-    
-    # 5. Visualize Both Images
-    print("Visualizing both images...")
-    try:
-        fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-
-        original_image = Image.open(local_image_path)
-        axes[0].imshow(original_image)
-        axes[0].set_title("1. Image Downloaded Locally")
-        axes[0].axis('off')
-
-        axes[1].imshow(retrieved_image)
-        axes[1].set_title("2. Image Loaded via Path from Milvus")
-        axes[1].axis('off')
-
-        plt.suptitle("Image Comparison: Local vs. Milvus-retrieved Path", fontsize=16)
-        plt.tight_layout(rect=[0, 0, 1, 0.95])
-        plt.show()
-
-        os.remove(local_image_path)
-        print(f"Local file '{local_image_path}' has been deleted.")
-
-    except Exception as e:
-        print(f"An error occurred while visualizing the images: {e}")
-        return
 
 if __name__ == "__main__":
-    process_image_with_milvus()
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Milvus 클라이언트 초기화
+    try:
+        milvus_client = MilvusClient(
+            uri=f"http://{MILVUS_HOST}:{MILVUS_PORT}",
+            db_name="default",
+            timeout=10
+        )
+        print(f"🔗 Milvus 클라이언트 연결 성공: {MILVUS_HOST}:{MILVUS_PORT}")
+    except Exception as e:
+        print(f"❌ Milvus 클라이언트 연결 실패: {e}")
+        milvus_client = None
+
+    if milvus_client:
+        create_milvus_collection(milvus_client)
+
+        # 1) URL 수집 (5페이지 한정)
+        book_urls = collect_book_urls(START_URL, max_pages=5)
+        print(f"[INFO] 수집된 책 URL 수: {len(book_urls)}")
+
+        # 2) 멀티스레드 상세 파싱(+이미지 저장 & Milvus 저장)
+        books = parse_details_multithread(book_urls, milvus_client)
+
+        milvus_client.close()
+
+    # 3) 파일 저장 (기존과 동일)
+    out_path = DATA_DIR / "books_5pages.json"
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(books, f, ensure_ascii=False, indent=2)
+    print(f"Data saved to {out_path}")
+    print(f"Images saved to {IMAGES_DIR}/")
