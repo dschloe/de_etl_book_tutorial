@@ -16,3 +16,4 @@ seaborn
 pyarrow
 pymilvus==2.6.0
 sentence-transformers
+streamlit
