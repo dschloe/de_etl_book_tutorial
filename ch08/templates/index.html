@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>도서 검색 서비스</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        .container { max-width: 1200px; margin: auto; }
+        .search-form { margin-bottom: 20px; padding: 20px; border: 1px solid #ccc; border-radius: 8px; }
+        .search-form label { font-weight: bold; margin-right: 10px; }
+        .search-form input, .search-form button { margin-right: 10px; }
+        .results-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; }
+        .book-card { border: 1px solid #eee; padding: 10px; text-align: center; border-radius: 8px; }
+        .book-card img { max-width: 100%; height: auto; display: block; margin: auto; }
+        .pagination { margin-top: 20px; text-align: center; }
+        .pagination a, .pagination span { padding: 8px 16px; text-decoration: none; color: #007BFF; border: 1px solid #ddd; margin: 0 4px; border-radius: 4px; }
+        .pagination span.current { background-color: #007BFF; color: white; border: 1px solid #007BFF; }
+        .book-link { text-decoration: none; color: black; }
+        .book-link:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📚 도서 검색 서비스</h1>
+
+        <div class="search-form">
+            <h3>데이터 분석</h3>
+            <p>데이터 대시보드를 보려면 아래 버튼을 클릭하세요.</p>
+            <a href="/analysis" class="button">데이터 분석 대시보드</a>
+        </div>
+        
+        <hr>
+
+        <div class="search-form">
+            <h3>이미지로 검색</h3>
+            <form action="/search/image" method="post" enctype="multipart/form-data">
+                <label for="image">이미지 파일 선택:</label>
+                <input type="file" name="image" id="image" accept="image/*" required>
+                <label for="num_results">유사 이미지 개수:</label>
+                <input type="number" name="num_results" id="num_results" value="10" min="1" max="100">
+                <button type="submit">검색</button>
+            </form>
+        </div>
+
+        <div class="search-form">
+            <h3>가격으로 검색</h3>
+            <form action="/search/metadata" method="get">
+                <label for="min_price">최소 가격:</label>
+                <input type="number" name="min_price" id="min_price" value="0">
+                <label for="max_price">최대 가격:</label>
+                <input type="number" name="max_price" id="max_price" value="100">
+                <button type="submit">검색</button>
+            </form>
+        </div>
+
+        <hr>
+
+        {% if results %}
+            <h2>검색 결과</h2>
+            <div class="results-grid">
+                {% for book in results %}
+                <div class="book-card">
+                    <a href="{{ book.url }}" target="_blank" class="book-link">
+                        <img src="{{ book.image_path }}" alt="{{ book.title }}">
+                        <h4>{{ book.title }}</h4>
+                        <p><strong>가격:</strong> ${{ "%.2f"|format(book.price) }}</p>
+                    </a>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="pagination">
+                {% if search_type == 'image' %}
+                    {% if page > 1 %}
+                        <a href="/search/image/paginate?session_id={{ session_id }}&page={{ page - 1 }}">이전</a>
+                    {% endif %}
+                    <span>페이지 {{ page }} / {{ total_pages }}</span>
+                    {% if page < total_pages %}
+                        <a href="/search/image/paginate?session_id={{ session_id }}&page={{ page + 1 }}">다음</a>
+                    {% endif %}
+                {% elif search_type == 'metadata' %}
+                    {% if page > 1 %}
+                        <a href="?page={{ page - 1 }}&min_price={{ min_price }}&max_price={{ max_price }}">이전</a>
+                    {% endif %}
+                    <span>페이지 {{ page }} / {{ total_pages }}</span>
+                    {% if page < total_pages %}
+                        <a href="?page={{ page + 1 }}&min_price={{ min_price }}&max_price={{ max_price }}">다음</a>
+                    {% endif %}
+                {% endif %}
+            </div>
+        {% elif request.method == 'POST' or request.method == 'GET' and 'min_price' in request.query_params %}
+            <p>검색 결과가 없습니다.</p>
+        {% endif %}
+
+    </div>
+</body>
+</html>

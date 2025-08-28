@@ -17,3 +17,7 @@ pyarrow
 pymilvus==2.6.0
 sentence-transformers
 streamlit
+fastapi[all]
+jinja2
+uvicorn
+python-multipart
