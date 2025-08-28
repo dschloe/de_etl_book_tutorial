@@ -115,9 +115,6 @@ async def startup_event():
 async def serve_dashboard(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
-@app.get("/analysis", response_class=RedirectResponse)
-async def redirect_to_analysis():
-    return RedirectResponse(url="http://127.0.0.1:8501")
 
 @app.post("/search/image", response_class=HTMLResponse)
 async def search_by_image(request: Request, image: UploadFile = File(...), num_results: int = Form(10), page: int = 1):
