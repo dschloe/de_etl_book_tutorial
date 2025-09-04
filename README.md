@@ -6,6 +6,15 @@
 
 ![](/img/book_cover.png)
 
+## 📚🛒 교재 판매처
+- **부크크** : https://bookk.co.kr/bookStore/68b55934cb43bc855c4db176
+- **Yes24** : 
+- **교보문고** : 
+
+## 실습 영상 유투브
+- 교재에 링크 있음
+- **유투브** : https://www.youtube.com/channel/UCKvaj8HAgWPtELuwbWpFZUQ
+
 ## 📚 챕터별 학습 내용
 
 ### Ch01: Python 기초 및 환경 설정
@@ -262,7 +271,6 @@ streamlit run app.py --server.port 8501
 
 ## 📝 참고 자료
 
-- **PDF**: `데이터 분석가를 위한 데이터 엔지니어링 기초 다지기 with Python_250828.pdf`
 - **SQL 스크립트**: `get_data.sql` - 데이터 조회 예제
 - **설정 파일**: `embedEtcd.yaml`, `user.yaml` - 시스템 설정
 
