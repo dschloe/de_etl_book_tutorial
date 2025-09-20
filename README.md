@@ -8,7 +8,7 @@
 
 ## 📚🛒 교재 판매처
 - **부크크** : https://bookk.co.kr/bookStore/68b55934cb43bc855c4db176
-- **Yes24** : 
+- **Yes24** : https://www.yes24.com/product/goods/154230519
 - **교보문고** : 
 
 ## 실습 영상 유투브
